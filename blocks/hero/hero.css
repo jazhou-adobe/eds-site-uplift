@@ -4,34 +4,91 @@
 }
 
 .hero {
-  position: relative;
+  background: var(--hero-gradient);
   padding: 40px 24px;
-  min-height: 300px;
+}
+
+.hero > div > div {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.hero h1,
+.hero p {
+  color: #fff;
 }
 
 .hero h1 {
-  max-width: 1200px;
-  margin-left: auto;
-  margin-right: auto;
-  color: var(--background-color);
+  font-weight: 600;
 }
 
-.hero picture {
-  position: absolute;
-  z-index: -1;
-  inset: 0;
-  object-fit: cover;
-  box-sizing: border-box;
+.hero p {
+  font-size: var(--body-font-size-m);
+  line-height: 1.6;
 }
 
-.hero img {
-  object-fit: cover;
-  width: 100%;
-  height: 100%;
+/* white outlined CTA button on navy */
+.hero.block a.button.primary {
+  border-color: #fff;
+  background-color: transparent;
+  color: #fff;
+}
+
+.hero.block a.button.primary:hover,
+.hero.block a.button.primary:focus-visible {
+  border-color: #fff;
+  background-color: #fff;
+  color: var(--brand-navy);
+}
+
+/* split layout: text beside image */
+.hero-split > div > div {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  align-items: center;
+}
+
+.hero-split .hero-content {
+  flex: 1 1 0;
+  text-align: center;
+}
+
+.hero-split .hero-media {
+  flex: 1 1 0;
+  display: flex;
+  justify-content: center;
+}
+
+.hero-media picture {
+  display: block;
+}
+
+.hero-media img {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 300px;
+}
+
+@media (width >= 900px) {
+  .hero-media img {
+    max-height: 330px;
+  }
 }
 
 @media (width >= 900px) {
   .hero {
-    padding: 40px 32px;
+    padding: 56px 32px;
+  }
+
+  .hero-split > div > div {
+    flex-direction: row;
+    gap: 48px;
+  }
+
+  .hero-split .hero-content {
+    text-align: left;
   }
 }
