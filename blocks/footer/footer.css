@@ -18,3 +18,105 @@ footer .footer p {
     padding: 40px 32px 24px;
   }
 }
+
+/* ==========================================================================
+   ANZ footer customisation — scoped under footer .footer
+   ========================================================================== */
+
+footer .footer {
+  --anz-navy: #003a56;
+  --anz-link: #005e9e;
+
+  border-bottom: 4px solid var(--brand-blue);
+  color: var(--anz-navy);
+}
+
+footer .footer h3 {
+  margin: 0 0 12px;
+  color: var(--anz-navy);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+footer .footer ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+footer .footer li {
+  padding: 6px 0;
+}
+
+footer .footer a:any-link {
+  color: var(--anz-link);
+  text-decoration: none;
+}
+
+footer .footer a:hover {
+  text-decoration: underline;
+}
+
+/* link-column sections stack on mobile */
+footer .footer .section:not(:has(.default-content-wrapper)) {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+/* legal / copyright section */
+footer .footer .section:has(.default-content-wrapper) {
+  border-top: 1px solid #ddd;
+  padding-top: 20px;
+}
+
+footer .footer .default-content-wrapper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+footer .footer .default-content-wrapper p:first-child {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+}
+
+footer .footer .default-content-wrapper p:last-child {
+  color: #666;
+}
+
+/* colored social icons */
+footer .footer ul.footer-social {
+  display: flex;
+  gap: 14px;
+  margin-top: 4px;
+}
+
+footer .footer ul.footer-social li {
+  padding: 0;
+}
+
+footer .footer ul.footer-social a {
+  display: inline-flex;
+}
+
+footer .footer ul.footer-social .icon {
+  width: 28px;
+  height: 28px;
+}
+
+footer .footer ul.footer-social .icon img {
+  width: 100%;
+  height: 100%;
+}
+
+@media (width >= 900px) {
+  footer .footer .section:not(:has(.default-content-wrapper)) {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px 32px;
+  }
+}
