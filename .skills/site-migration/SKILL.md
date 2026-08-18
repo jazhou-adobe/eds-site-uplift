@@ -18,8 +18,8 @@ description: >
   <live site>", "uplift/refresh a page from a URL", or asks to import a page or
   site AND match its look. Chains the page-import, migrate-header,
   da-content/da-auth, and stardust:diff skills, reuses stardust:rollout's
-  wave/ledger batch-execution model for multi-page fan-out, and adds the
-  project-specific gotchas learned on the ANZ job.
+  wave/ledger batch-execution model for multi-page fan-out, and folds in
+  hard-won migration gotchas (see the Gotchas section below).
 license: Apache-2.0
 metadata:
   version: "2.3.0"
@@ -74,6 +74,10 @@ port), hand off to `stardust:prepare-migration` + `stardust:rollout` instead.
 - Dev server for local preview: `npx -y @adobe/aem-cli up --no-open --forward-browser-logs --html-folder drafts` (background). Un-authored test content lives in `drafts/` and serves at `/drafts/<name>` (nested paths serve at `/drafts/<section>/<name>`).
 - **Playwright lives in** `.skills/adobe/aem/edge-delivery-services/scrape-webpage/scripts/node_modules`. ESM resolves `import 'playwright'` from the script's own dir, so put any `.mjs` browser/diff script INSIDE that dir and run it there; clean up temp scripts after.
 - `npm install` at repo root before `npm run lint`.
+- This skill ships two local scripts under `scripts/`: `build-da.mjs` (DA
+  transform template, Phase 6) and `typography-diff.mjs` (block-by-block
+  typography diff probe, Phase 4/5) — copy whichever you need into the
+  playwright scripts dir per the rule above.
 
 ---
 
@@ -214,7 +218,7 @@ subagents rediscover the same missing block or wrong token independently.
 ### Phase 1 — Import main content → `page-import`
 Scrape → identify structure → authoring analysis → generate HTML → preview. Output:
 `drafts/<page>.plain.html` (+ `drafts/images/`) previewing at `http://localhost:3000/drafts/<page>`.
-- Override the auto documentPath to the target from `migration/site-map.json` (e.g. `/personal`), not an ad hoc guess — the ledger is authoritative.
+- Override the auto documentPath to the target from `migration/site-map.json` (e.g. `/about`), not an ad hoc guess — the ledger is authoritative.
 - Import MAIN content only; skip header/nav/footer (Phase 2).
 - **Rewrite every internal link per the Link rewrite rule above** using `migration/site-map.json` — don't leave in-scope links pointing at the source domain.
 - Keep `import-work/` (has `metadata.json` with the **original image URL → local file** map — needed at deploy).
@@ -253,13 +257,45 @@ a value pinned from a single reference screenshot was corrected later once
 measured properly across widths.
 
 ### Phase 4 — Fidelity pass  → block CSS + content, per-block to match the source
-Match the source's design LANGUAGE, not a generic "modern" look. Checklist that recurred:
+Work in two passes on every block — **survey the whole page and group every
+finding before fixing anything.** Fixing block-by-block as you go hides
+duplicate root causes (one wrong token can explain five blocks) and makes it
+easy to skip a whole category unreviewed.
+
+**4a. Survey (check).** Walk every block against the source and record
+findings under fixed categories, not a flat list:
+- **Layout/composition** — hero treatment, link-group column layout vs grid,
+  panel/eyebrow treatment, image crop/bleed, icon presence.
+- **Typography, per block** — for each block's headings, body copy, links,
+  and any rule/divider, compare against the source's computed styles:
+  - **Type** — font-family (the actual rendered face, not just the declared name).
+  - **Weight** — font-weight.
+  - **Line height** — line-height ÷ font-size ratio (a unitless ratio survives
+    a font-size change; a raw px comparison doesn't).
+  - **Line space** — letter-spacing.
+  - **Line weight** — stroke width of any rule the block renders as (divider
+    `border`, underline `text-decoration-thickness`, `<hr>`).
+  Run `scripts/typography-diff.mjs` (Phase 5) to get this per block instead
+  of eyeballing it — use it during the survey, not only at the gate.
+- **Color/imagery** — link/brand colors, image treatment (full-bleed vs
+  contained), icon style.
+
+**4b. Fix, grouped.** Apply fixes in the survey's category order — all
+typography fixes together, then all layout fixes, etc. — not block-by-block
+in survey order. A shared root cause (a missing `--line-height-tight` token,
+a wrong body-copy `font-weight`) usually spans several blocks; fixing by
+category closes every instance in one CSS change instead of re-discovering
+it per block.
+
+Match the source's design LANGUAGE, not a generic "modern" look. Patterns
+that recurred across migrations:
 - **Hero:** full-bleed brand-gradient background + white text + white-outline CTA (not a light panel).
 - **Link groups:** the source's own layout — often a heading in a LEFT column with links flowing
   **vertically down columns** (`column-count`, not a row-filling grid), chevrons only where the source has them.
 - **Eyebrows:** pill badges, not uppercase text.
-- **Panels:** tinted/grey rounded containers for notices and tool lists (privacy info-bar, calculators panel).
-- **Images:** lifestyle photos full-bleed / un-rounded; product/phone mockups contained & un-cropped.
+- **Panels:** tinted/grey rounded containers for notices and grouped tool/utility content (e.g.
+  compliance banners, interactive widget panels) — match the source's container treatment, not a generic card.
+- **Images:** lifestyle photos full-bleed / un-rounded; product mockups contained & un-cropped.
 - **Icons:** add outline SVGs under `icons/` + `<span class="icon icon-NAME">` (decorateIcons renders them).
 - **Collapsible sections:** a small `<details>`-based block for legal/expandable panels.
 - **Footer:** coloured social icons + accent.
@@ -268,19 +304,26 @@ Match the source's design LANGUAGE, not a generic "modern" look. Checklist that 
   (wide viewports expose `max-width`/`column-count` assumptions that never show up at
   1920px). See "Gotchas" for WHY section styling must hook off block classes.
 
-### Phase 5 — Validate locally  → `diff` (both probes, both widths)
-Copy `.skills/stardust/diff/scripts/*.mjs` into the playwright scripts dir and run
-**both probes at both widths** — 1080p (`--width 1920`) and 2K/QHD
+### Phase 5 — Validate locally  → `diff` (all probes, both widths)
+Copy `.skills/stardust/diff/scripts/*.mjs` and this skill's own
+`scripts/typography-diff.mjs` into the playwright scripts dir and run
+**all three probes at both widths** — 1080p (`--width 1920`) and 2K/QHD
 (`--width 2560`). A 2K-only gap (column layout re-flowing, hero art stretching,
 a max-width wrap kicking in differently) is common and invisible at 1920px, so
 never skip the second width to save time:
 ```
-node visual-diff.mjs  "<source-url>" "http://localhost:3000/drafts/<page>" --profile eds --width 1920
-node visual-diff.mjs  "<source-url>" "http://localhost:3000/drafts/<page>" --profile eds --width 2560
-node content-diff.mjs "<source-url>" "http://localhost:3000/drafts/<page>" --profile eds --width 1920
-node content-diff.mjs "<source-url>" "http://localhost:3000/drafts/<page>" --profile eds --width 2560
+node visual-diff.mjs      "<source-url>" "http://localhost:3000/drafts/<page>" --profile eds --width 1920
+node visual-diff.mjs      "<source-url>" "http://localhost:3000/drafts/<page>" --profile eds --width 2560
+node content-diff.mjs     "<source-url>" "http://localhost:3000/drafts/<page>" --profile eds --width 1920
+node content-diff.mjs     "<source-url>" "http://localhost:3000/drafts/<page>" --profile eds --width 2560
+node typography-diff.mjs  "<source-url>" "http://localhost:3000/drafts/<page>" --width 1920
+node typography-diff.mjs  "<source-url>" "http://localhost:3000/drafts/<page>" --width 2560
 ```
-- **Pass bar:** at EACH width — visual red flags none/justified AND content-diff 0 structural 🔴 (🟡/🟠 confirmed). A pass at 1920 and a fail at 2560 is still a fail; fix and re-run both.
+- **Pass bar:** at EACH width — visual red flags none/justified AND content-diff 0 structural 🔴
+  (🟡/🟠 confirmed) AND typography-diff 0 unreviewed DIFF rows (a DIFF is fine once you've
+  *decided* it's intentional — e.g. a domain-locked source font falling back locally — record
+  why; an unreviewed DIFF is not). A pass at 1920 and a fail at 2560 is still a fail; fix and
+  re-run all three.
 - **Read the reds critically:** on a content-cleaned migration, expect FALSE 🔴 "MISSING CTA"
   from (a) role classification (source `cta` vs our list links) and (b) stripped `?pid=` tracking
   params in hrefs, plus intentional omissions (hidden legal footnotes). VERIFY each red's text is
@@ -321,18 +364,21 @@ node content-diff.mjs "<source-url>" "http://localhost:3000/drafts/<page>" --pro
 ### Phase 6.5 — Validate against the deployed preview URL (both widths)
 A pass against `localhost:3000/drafts/<page>` is necessary but not sufficient — the
 real EDS pipeline (block transport, DA content shaping, real font loading, CDN
-rendering) can reshape the page between draft and deploy. **Re-run both probes at
+rendering) can reshape the page between draft and deploy. **Re-run all three probes at
 both widths against the feature preview URL**, not just the local draft:
 ```
 BUILD="https://<branch>--<repo>--<owner>.aem.page/<path>"
-node visual-diff.mjs  "<source-url>" "$BUILD" --profile eds --width 1920
-node visual-diff.mjs  "<source-url>" "$BUILD" --profile eds --width 2560
-node content-diff.mjs "<source-url>" "$BUILD" --profile eds --width 1920
-node content-diff.mjs "<source-url>" "$BUILD" --profile eds --width 2560
+node visual-diff.mjs      "<source-url>" "$BUILD" --profile eds --width 1920
+node visual-diff.mjs      "<source-url>" "$BUILD" --profile eds --width 2560
+node content-diff.mjs     "<source-url>" "$BUILD" --profile eds --width 1920
+node content-diff.mjs     "<source-url>" "$BUILD" --profile eds --width 2560
+node typography-diff.mjs  "<source-url>" "$BUILD" --width 1920
+node typography-diff.mjs  "<source-url>" "$BUILD" --width 2560
 ```
 - A defect that shows up here but NOT in Phase 5's local check means the delivery
   pipeline reshaped the content in transport (a block's flattened-shape fallback,
-  a metadata-driven nav/footer swap) — fix the transport/block, not the authoring.
+  a metadata-driven nav/footer swap, real webfont loading vs local fallback) — fix
+  the transport/block, not the authoring.
 - Only on a pass at both widths against the deployed preview URL does the page earn
   `status: preview-ready` in `migration/site-map.json`. On full publish success, set
   `status: deployed`.
@@ -483,7 +529,7 @@ Phase 7. This phase is the whole-batch wrap-up:
 
 - Page renders at `/drafts/<page>` with 0 console errors / 0 broken images, `npm run lint` clean.
 - Cropped per-section compare against `import-work/screenshot.png` matches (esp. heading slots), at both 1080p and 2K.
-- Diff gate: visual none/justified, content-diff 0 real 🔴 — **at both widths (1920px, 2560px), against BOTH the local draft AND the deployed feature-preview URL.**
+- Diff gate: visual none/justified, content-diff 0 real 🔴, typography-diff 0 unreviewed DIFF rows (type/weight/line-height/line-space/line-weight, block by block) — **at both widths (1920px, 2560px), against BOTH the local draft AND the deployed feature-preview URL.**
 - Deployed: code on `main`, content previewed + published; `https://main--{repo}--{owner}.aem.live/<path>` renders fully.
 - **Multi-page additionally:** scope was confirmed with the user and recorded in
   `migration/scope.json`; every page in `migration/site-map.json` reached

@@ -12,7 +12,7 @@ const out = (p, s) => writeFileSync(new URL(`deploy/${p}`, ROOT), s);
 mkdirSync(new URL('deploy/', ROOT), { recursive: true });
 
 const CONFIG = {
-  page: 'personal.plain.html',        // drafts file for the page
+  page: 'index.plain.html',           // drafts file for the page — set per migration
   nav: 'nav.plain.html',              // drafts file for the nav fragment
   footer: 'footer.plain.html',        // drafts file for the footer fragment
   logoLocal: '/drafts/images/logo.png',
@@ -23,13 +23,15 @@ const CONFIG = {
   },
 };
 
+const pageSlug = CONFIG.page.replace(/\.plain\.html$/, ''); // drafts/<slug>.plain.html -> deploy/<slug>.html
+
 const wrap = (inner) => `<body>\n  <header></header>\n  <main>\n${inner}\n  </main>\n  <footer></footer>\n</body>\n`;
 
 // page: swap image URLs, strip the LOCAL-PREVIEW nav/footer override, wrap
 let page = draft(CONFIG.page);
 for (const [local, url] of Object.entries(CONFIG.images)) page = page.split(local).join(url);
 page = page.replace(/\n\s*<!-- LOCAL-PREVIEW OVERRIDE[\s\S]*?\/drafts\/footer<\/div>\s*<\/div>/, '');
-out('personal.html', wrap(page.trimEnd()));
+out(`${pageSlug}.html`, wrap(page.trimEnd()));
 
 // nav: point logo at its DA media URL, wrap
 out('nav.html', wrap(draft(CONFIG.nav).split(CONFIG.logoLocal).join(CONFIG.logoUrl).trimEnd()));
@@ -38,9 +40,9 @@ out('nav.html', wrap(draft(CONFIG.nav).split(CONFIG.logoLocal).join(CONFIG.logoU
 out('footer.html', wrap(draft(CONFIG.footer).trimEnd()));
 
 // guard rails
-const p = readFileSync(new URL('deploy/personal.html', ROOT), 'utf8');
+const p = readFileSync(new URL(`deploy/${pageSlug}.html`, ROOT), 'utf8');
 console.log('checks:',
   ['<main>', '</main>'].every((s) => p.includes(s)) ? 'skeleton OK' : 'SKELETON MISSING',
   !p.includes('./images/') ? '| no local imgs' : '| LOCAL IMGS REMAIN',
   !p.includes('/drafts/nav') ? '| override stripped' : '| OVERRIDE REMAINS');
-console.log('wrote deploy/{personal,nav,footer}.html');
+console.log(`wrote deploy/{${pageSlug},nav,footer}.html`);
