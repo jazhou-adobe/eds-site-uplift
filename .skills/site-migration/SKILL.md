@@ -74,10 +74,11 @@ port), hand off to `stardust:prepare-migration` + `stardust:rollout` instead.
 - Dev server for local preview: `npx -y @adobe/aem-cli up --no-open --forward-browser-logs --html-folder drafts` (background). Un-authored test content lives in `drafts/` and serves at `/drafts/<name>` (nested paths serve at `/drafts/<section>/<name>`).
 - **Playwright lives in** `.skills/adobe/aem/edge-delivery-services/scrape-webpage/scripts/node_modules`. ESM resolves `import 'playwright'` from the script's own dir, so put any `.mjs` browser/diff script INSIDE that dir and run it there; clean up temp scripts after.
 - `npm install` at repo root before `npm run lint`.
-- This skill ships two local scripts under `scripts/`: `build-da.mjs` (DA
-  transform template, Phase 6) and `typography-diff.mjs` (block-by-block
-  typography diff probe, Phase 4/5) — copy whichever you need into the
-  playwright scripts dir per the rule above.
+- This skill ships three local scripts under `scripts/`: `build-da.mjs` (DA
+  transform template, Phase 6), `typography-diff.mjs` (block-by-block font
+  fidelity probe, Phase 4/5), and `block-diff.mjs` (block-by-block width /
+  text-overlay / link-button UX / icon fidelity probe, Phase 4/5) — copy
+  whichever you need into the playwright scripts dir per the rule above.
 
 ---
 
@@ -265,7 +266,22 @@ easy to skip a whole category unreviewed.
 **4a. Survey (check).** Walk every block against the source and record
 findings under fixed categories, not a flat list:
 - **Layout/composition** — hero treatment, link-group column layout vs grid,
-  panel/eyebrow treatment, image crop/bleed, icon presence.
+  panel/eyebrow treatment, image crop/bleed.
+- **Block width** — each block's rendered width (px and % of viewport)
+  against the source; a block clamped to a narrower/wider effective
+  `max-width` reads as a structural miss even when every token and font matches.
+- **Text-overlay position** — for a block with text laid over media (hero,
+  promo tiles), the text's anchor zone (top/middle/bottom × left/center/right)
+  relative to the media, not just whether overlay text exists.
+- **Link/button UX** — does each link render as a BUTTON (background/border,
+  or this project's `<strong>`/`<em>` wrap convention — Gotcha #2) or a plain
+  link, same as the source; does it carry the source's icon; does it have ANY
+  hover/focus feedback at all (a link that lost its hover/focus state is a
+  real regression even with the right text and color).
+- **Icons** — count of icon-bearing elements per block; a block that dropped
+  its icon set reads noticeably flatter even with correct text/color.
+  Run `scripts/block-diff.mjs` (Phase 5) for the four bullets above instead
+  of eyeballing — use it during the survey, not only at the gate.
 - **Typography, per block** — for each block's headings, body copy, links,
   and any rule/divider, compare against the source's computed styles:
   - **Type** — font-family (the actual rendered face, not just the declared name).
@@ -278,7 +294,7 @@ findings under fixed categories, not a flat list:
   Run `scripts/typography-diff.mjs` (Phase 5) to get this per block instead
   of eyeballing it — use it during the survey, not only at the gate.
 - **Color/imagery** — link/brand colors, image treatment (full-bleed vs
-  contained), icon style.
+  contained).
 
 **4b. Fix, grouped.** Apply fixes in the survey's category order — all
 typography fixes together, then all layout fixes, etc. — not block-by-block
@@ -306,11 +322,11 @@ that recurred across migrations:
 
 ### Phase 5 — Validate locally  → `diff` (all probes, both widths)
 Copy `.skills/stardust/diff/scripts/*.mjs` and this skill's own
-`scripts/typography-diff.mjs` into the playwright scripts dir and run
-**all three probes at both widths** — 1080p (`--width 1920`) and 2K/QHD
-(`--width 2560`). A 2K-only gap (column layout re-flowing, hero art stretching,
-a max-width wrap kicking in differently) is common and invisible at 1920px, so
-never skip the second width to save time:
+`scripts/typography-diff.mjs` + `scripts/block-diff.mjs` into the playwright
+scripts dir and run **all four probes at both widths** — 1080p
+(`--width 1920`) and 2K/QHD (`--width 2560`). A 2K-only gap (column layout
+re-flowing, hero art stretching, a max-width wrap kicking in differently) is
+common and invisible at 1920px, so never skip the second width to save time:
 ```
 node visual-diff.mjs      "<source-url>" "http://localhost:3000/drafts/<page>" --profile eds --width 1920
 node visual-diff.mjs      "<source-url>" "http://localhost:3000/drafts/<page>" --profile eds --width 2560
@@ -318,12 +334,14 @@ node content-diff.mjs     "<source-url>" "http://localhost:3000/drafts/<page>" -
 node content-diff.mjs     "<source-url>" "http://localhost:3000/drafts/<page>" --profile eds --width 2560
 node typography-diff.mjs  "<source-url>" "http://localhost:3000/drafts/<page>" --width 1920
 node typography-diff.mjs  "<source-url>" "http://localhost:3000/drafts/<page>" --width 2560
+node block-diff.mjs       "<source-url>" "http://localhost:3000/drafts/<page>" --width 1920
+node block-diff.mjs       "<source-url>" "http://localhost:3000/drafts/<page>" --width 2560
 ```
 - **Pass bar:** at EACH width — visual red flags none/justified AND content-diff 0 structural 🔴
-  (🟡/🟠 confirmed) AND typography-diff 0 unreviewed DIFF rows (a DIFF is fine once you've
-  *decided* it's intentional — e.g. a domain-locked source font falling back locally — record
-  why; an unreviewed DIFF is not). A pass at 1920 and a fail at 2560 is still a fail; fix and
-  re-run all three.
+  (🟡/🟠 confirmed) AND typography-diff/block-diff 0 unreviewed DIFF rows (a DIFF is fine once
+  you've *decided* it's intentional — e.g. a domain-locked source font falling back locally, or a
+  deliberately narrower `max-width` — record why; an unreviewed DIFF is not). A pass at 1920 and
+  a fail at 2560 is still a fail; fix and re-run all four.
 - **Read the reds critically:** on a content-cleaned migration, expect FALSE 🔴 "MISSING CTA"
   from (a) role classification (source `cta` vs our list links) and (b) stripped `?pid=` tracking
   params in hrefs, plus intentional omissions (hidden legal footnotes). VERIFY each red's text is
@@ -364,7 +382,7 @@ node typography-diff.mjs  "<source-url>" "http://localhost:3000/drafts/<page>" -
 ### Phase 6.5 — Validate against the deployed preview URL (both widths)
 A pass against `localhost:3000/drafts/<page>` is necessary but not sufficient — the
 real EDS pipeline (block transport, DA content shaping, real font loading, CDN
-rendering) can reshape the page between draft and deploy. **Re-run all three probes at
+rendering) can reshape the page between draft and deploy. **Re-run all four probes at
 both widths against the feature preview URL**, not just the local draft:
 ```
 BUILD="https://<branch>--<repo>--<owner>.aem.page/<path>"
@@ -374,6 +392,8 @@ node content-diff.mjs     "<source-url>" "$BUILD" --profile eds --width 1920
 node content-diff.mjs     "<source-url>" "$BUILD" --profile eds --width 2560
 node typography-diff.mjs  "<source-url>" "$BUILD" --width 1920
 node typography-diff.mjs  "<source-url>" "$BUILD" --width 2560
+node block-diff.mjs       "<source-url>" "$BUILD" --width 1920
+node block-diff.mjs       "<source-url>" "$BUILD" --width 2560
 ```
 - A defect that shows up here but NOT in Phase 5's local check means the delivery
   pipeline reshaped the content in transport (a block's flattened-shape fallback,
@@ -529,7 +549,7 @@ Phase 7. This phase is the whole-batch wrap-up:
 
 - Page renders at `/drafts/<page>` with 0 console errors / 0 broken images, `npm run lint` clean.
 - Cropped per-section compare against `import-work/screenshot.png` matches (esp. heading slots), at both 1080p and 2K.
-- Diff gate: visual none/justified, content-diff 0 real 🔴, typography-diff 0 unreviewed DIFF rows (type/weight/line-height/line-space/line-weight, block by block) — **at both widths (1920px, 2560px), against BOTH the local draft AND the deployed feature-preview URL.**
+- Diff gate: visual none/justified, content-diff 0 real 🔴, typography-diff 0 unreviewed DIFF rows (type/weight/line-height/line-space/line-weight), block-diff 0 unreviewed DIFF rows (width/text-overlay position/link-button UX/icons) — all **block by block**, at both widths (1920px, 2560px), against BOTH the local draft AND the deployed feature-preview URL.
 - Deployed: code on `main`, content previewed + published; `https://main--{repo}--{owner}.aem.live/<path>` renders fully.
 - **Multi-page additionally:** scope was confirmed with the user and recorded in
   `migration/scope.json`; every page in `migration/site-map.json` reached
