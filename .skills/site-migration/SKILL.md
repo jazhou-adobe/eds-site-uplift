@@ -22,7 +22,7 @@ description: >
   hard-won migration gotchas (see the Gotchas section below).
 license: Apache-2.0
 metadata:
-  version: "2.3.0"
+  version: "2.4.0"
 ---
 
 # site-migration — full-page and full-site migration with design fidelity + IA
@@ -62,6 +62,7 @@ port), hand off to `stardust:prepare-migration` + `stardust:rollout` instead.
 | Header (+ mega-menu) | `migrate-header` | `.skills/ema/migrate-header/` |
 | Design craft (optional) | `impeccable` | `.skills/impeccable/` |
 | Fidelity diff gate | `diff` (`stardust:diff`) | `.skills/stardust/diff/` |
+| Per-block fidelity audit | `page-fidelity-pass` | `.skills/page-fidelity-pass/` |
 | DA auth / upload rules | `da-auth`, `da-content` | `.skills/adobe/aem/edge-delivery-services/da-auth/`, `.../da-content/` |
 | Batch execution model (reference only — mechanics, not the state machine) | `rollout` Phase A/C | `.skills/stardust/rollout/SKILL.md` |
 
@@ -74,11 +75,31 @@ port), hand off to `stardust:prepare-migration` + `stardust:rollout` instead.
 - Dev server for local preview: `npx -y @adobe/aem-cli up --no-open --forward-browser-logs --html-folder drafts` (background). Un-authored test content lives in `drafts/` and serves at `/drafts/<name>` (nested paths serve at `/drafts/<section>/<name>`).
 - **Playwright lives in** `.skills/adobe/aem/edge-delivery-services/scrape-webpage/scripts/node_modules`. ESM resolves `import 'playwright'` from the script's own dir, so put any `.mjs` browser/diff script INSIDE that dir and run it there; clean up temp scripts after.
 - `npm install` at repo root before `npm run lint`.
-- This skill ships three local scripts under `scripts/`: `build-da.mjs` (DA
-  transform template, Phase 6), `typography-diff.mjs` (block-by-block font
-  fidelity probe, Phase 4/5), and `block-diff.mjs` (block-by-block width /
-  text-overlay / link-button UX / icon fidelity probe, Phase 4/5) — copy
-  whichever you need into the playwright scripts dir per the rule above.
+- This skill ships four local scripts under `scripts/`: `build-da.mjs` (DA
+  transform template + guardrails incl. absolute-image-URL check, Phase 6),
+  `typography-diff.mjs` (block-by-block font fidelity probe, Phase 4/5),
+  `block-diff.mjs` (block-by-block width / text-overlay / link-button UX / icon
+  fidelity probe, Phase 4/5), and `image-audit.mjs` (decode-based broken-image +
+  console-error gate for the deployed page, Phase 6.5) — copy whichever you need
+  into the playwright scripts dir per the rule above.
+
+## Migration log — REQUIRED after every phase
+
+`migration/MIGRATION-LOG.md` is the human-readable timeline of the migration and
+is MANDATORY: **every phase below (0 → 9), and every Part B per-page subagent,
+MUST append a row to it as that step's final action — a phase is not "done" until
+it is logged.** This is separate from `migration/site-map.json` (the machine
+ledger of per-page `status`); the log records WHAT was done, WHEN, by WHICH skill,
+and the RESULT.
+
+- Create it on first use with a title + a Markdown timeline table whose header is:
+  `| Time | Phase | Skill | Action | Result |`.
+- Append exactly one row when a phase completes (or one row per page in Part B),
+  e.g. `| 14:20 | 4 Fidelity | page-fidelity-pass | Home audit → 6 blocker/9 major tasks, all fixed | pass |`.
+- The log is **append-only history**: on a gate FAIL (Phase 5/6.5) log the fail
+  row (with the reason), then add a later row when it passes — never overwrite.
+- Close the file with a short **Result** summary once the scope is fully deployed
+  (pages migrated, IA preserved, verification evidence, live URL).
 
 ---
 
@@ -242,6 +263,15 @@ placeholder `/nav` and `/footer` — replace them.
   **Mark them LOCAL-PREVIEW ONLY** — strip (or repoint to global `/nav`,`/footer`) at deploy.
 - While authoring nav, record every nav link's path against `migration/site-map.json` —
   this is a primary source for Phase 0's page enumeration when no sitemap.xml exists.
+- **Nav + footer visual gate (REQUIRED — the page diff probes do NOT cover chrome).**
+  The Phase 5/6.5 probes scope to `<main>`; nav and footer live outside it and are
+  authored by hand here, so they get NO automatic comparison. Gate them explicitly:
+  crop the header AND footer from `import-work/source-full.png` and from the rendered
+  page (local draft AND deployed), at both widths, and compare — brand logo present,
+  menu layout/tiering, search/tools, footer background colour, footer link columns,
+  and every footer logo (e.g. partner/"managed by" marks). This is where a
+  guessed footer colour or a missing logo is caught; do not rely on eyeballing the
+  hero alone.
 
 ### Phase 3 — Design tokens  → update `styles/styles.css` `:root`
 The single biggest fidelity lever. Extract the source's REAL computed tokens with Playwright
@@ -257,44 +287,41 @@ widths (e.g. 1440/1920/2560) before treating a layout-affecting token as final �
 a value pinned from a single reference screenshot was corrected later once
 measured properly across widths.
 
+**Capture the FULL source page first — including the footer.** Before authoring,
+screenshot the live source with `fullPage: true` to `import-work/source-full.png`
+at both widths (1920 + 2560), and dismiss consent overlays first. A top-only shot
+(the trap that let a wrong-coloured footer, missing PRI/FSSA logos, and a plain-
+link CTA row ship undetected) gives you no evidence for the footer, the lower
+sections, or global chrome — which you will then author from assumption. Every
+later cropped compare (Phase 2 nav/footer gate, Phase 5 per-section) reads from
+this capture, so it must show the whole page.
+
 ### Phase 4 — Fidelity pass  → block CSS + content, per-block to match the source
 Work in two passes on every block — **survey the whole page and group every
 finding before fixing anything.** Fixing block-by-block as you go hides
 duplicate root causes (one wrong token can explain five blocks) and makes it
 easy to skip a whole category unreviewed.
 
-**4a. Survey (check).** Walk every block against the source and record
-findings under fixed categories, not a flat list:
-- **Layout/composition** — hero treatment, link-group column layout vs grid,
-  panel/eyebrow treatment, image crop/bleed.
-- **Block width** — each block's rendered width (px and % of viewport)
-  against the source; a block clamped to a narrower/wider effective
-  `max-width` reads as a structural miss even when every token and font matches.
-- **Text-overlay position** — for a block with text laid over media (hero,
-  promo tiles), the text's anchor zone (top/middle/bottom × left/center/right)
-  relative to the media, not just whether overlay text exists.
-- **Link/button UX** — does each link render as a BUTTON (background/border,
-  or this project's `<strong>`/`<em>` wrap convention — Gotcha #2) or a plain
-  link, same as the source; does it carry the source's icon; does it have ANY
-  hover/focus feedback at all (a link that lost its hover/focus state is a
-  real regression even with the right text and color).
-- **Icons** — count of icon-bearing elements per block; a block that dropped
-  its icon set reads noticeably flatter even with correct text/color.
-  Run `scripts/block-diff.mjs` (Phase 5) for the four bullets above instead
-  of eyeballing — use it during the survey, not only at the gate.
-- **Typography, per block** — for each block's headings, body copy, links,
-  and any rule/divider, compare against the source's computed styles:
-  - **Type** — font-family (the actual rendered face, not just the declared name).
-  - **Weight** — font-weight.
-  - **Line height** — line-height ÷ font-size ratio (a unitless ratio survives
-    a font-size change; a raw px comparison doesn't).
-  - **Line space** — letter-spacing.
-  - **Line weight** — stroke width of any rule the block renders as (divider
-    `border`, underline `text-decoration-thickness`, `<hr>`).
-  Run `scripts/typography-diff.mjs` (Phase 5) to get this per block instead
-  of eyeballing it — use it during the survey, not only at the gate.
-- **Color/imagery** — link/brand colors, image treatment (full-bleed vs
-  contained).
+**4a. Audit → `page-fidelity-pass` (replaces the manual per-block survey).**
+Do NOT hand-walk every block. Run the `page-fidelity-pass` skill
+(`.skills/page-fidelity-pass/`) with SOURCE = the live source URL and BUILD =
+this page's local draft (`http://localhost:3000/drafts/<page>`; re-run later with
+BUILD = the deployed preview URL in Phase 6.5). It is the automated form of the
+old block-by-block survey: it captures matched, label/position-paired per-block
+screenshot crops from both sides at BOTH widths, fans one read-only subagent out
+per block (plus a header+footer chrome agent and an unpaired-block reconciliation
+agent), and aggregates a deduped, severity-ranked task list at
+`fidelity/<page>/tasks.md` (evidence in `fidelity/<page>/findings.md`) across five
+facets per block — **WIDTH, ASSET, LOCATION, FONT, COLOUR** — plus link/button UX,
+icons, and dropped/added/reworded/renamed blocks.
+- It internally runs the same `visual-diff` / `content-diff` / `typography-diff` /
+  `block-diff` probes + `image-audit` as Phase 5 and captures the nav/footer chrome
+  crops, so the survey no longer needs a hand-cropped per-section compare.
+- Classic-AEM source with no `<main>`: pass its content root (`--source-main <sel>`);
+  dismiss any consent/country gate (`--dismiss <sel>`) or the crops capture the gate,
+  not the page. Always run BOTH widths (1920 + 2560).
+- `page-fidelity-pass` FINDS; it does not fix. Its blocker + major tasks are the
+  input to 4b.
 
 **4b. Fix, grouped.** Apply fixes in the survey's category order — all
 typography fixes together, then all layout fixes, etc. — not block-by-block
@@ -337,6 +364,16 @@ node typography-diff.mjs  "<source-url>" "http://localhost:3000/drafts/<page>" -
 node block-diff.mjs       "<source-url>" "http://localhost:3000/drafts/<page>" --width 1920
 node block-diff.mjs       "<source-url>" "http://localhost:3000/drafts/<page>" --width 2560
 ```
+- **All four probes are MANDATORY — do not shortcut to content-diff alone.**
+  `visual-diff` is the only probe that flags decode-failed images (`failedToLoad`)
+  and captures per-heading colours; skipping it is exactly how missing/broken
+  images and colour/logo divergence slip through a "passing" gate.
+- **Symmetric scoping when the source has no `<main>`.** Classic-AEM sources
+  render into `.page-content-container` (or similar), not `<main>` — pass
+  `--main <source-content-root>` to `content-diff` so the source side is scoped
+  the same as the EDS `<main>` build side. Without this you get a flood of false
+  🔴 chrome (cookie/nav/footer) that hides real misses (Gotcha 16). Detect it:
+  `curl -s <source> | grep -c '<main'` → 0 means override is required.
 - **Pass bar:** at EACH width — visual red flags none/justified AND content-diff 0 structural 🔴
   (🟡/🟠 confirmed) AND typography-diff/block-diff 0 unreviewed DIFF rows (a DIFF is fine once
   you've *decided* it's intentional — e.g. a domain-locked source font falling back locally, or a
@@ -347,9 +384,15 @@ node block-diff.mjs       "<source-url>" "http://localhost:3000/drafts/<page>" -
   params in hrefs, plus intentional omissions (hidden legal footnotes). VERIFY each red's text is
   actually absent (`curl <build> | grep`) before "fixing". A rewritten internal link (Link rewrite
   rule) changing the href value is expected and NOT a defect — only text/role changes matter.
-- **Caveat:** the probes do NOT catch "heading in the wrong column" (that's role+order intact,
-  no colour/stretch flag). **Layout-slot fidelity needs a cropped 1:1 per-section screenshot
-  compare** against `import-work/screenshot.png` — do that too, at both widths.
+- **Design + chrome coverage comes from `page-fidelity-pass` (Phase 4a), not a
+  hand-cropped compare.** The four probes are blind to design (colour, layout,
+  presence of design images, button-vs-link) and to global chrome — they compare
+  TEXT/roles and a few metrics inside `<main>`; nav/footer are outside it. The
+  `page-fidelity-pass` run in Phase 4a already covers this: matched per-block crops
+  judged per facet, plus dedicated header + footer chrome crops, against a FULL-PAGE
+  source capture at both widths. Do NOT re-crop by hand — if design/chrome misses
+  are suspected, re-run `page-fidelity-pass` (it is the per-block/chrome gate) and
+  clear its blocker/major tasks.
 - On pass at both widths, set the page's `migration/site-map.json` `status` to `imported` (not yet `preview-ready` — that's earned after the post-deploy check in Phase 6.5).
 
 ### Phase 6 — Deploy (TWO parts — both required)
@@ -366,10 +409,15 @@ node block-diff.mjs       "<source-url>" "http://localhost:3000/drafts/<page>" -
 - **The `metadata` block must be the LAST element of the LAST section**, never
   its own top-level section — otherwise SEO `<title>`/`<meta description>` tags
   aren't emitted and the metadata renders as visible text on the page.
-- **Images must be reachable URLs** — replace local `./images/<hash>` with the **original source
-  URLs** (from `import-work/metadata.json`; DA sideloads external URLs). Pre-upload only for URL
-  stability (logo → `/media/…` on `content.da.live`). **DA caps SVG uploads at 40KB** — rasterize
-  any oversized source SVG (QR codes, illustrations) to PNG and pre-upload it before referencing.
+- **Images must be ABSOLUTE `http(s)` URLs** (DA sideloads them; **root-relative
+  `/path` fails silently** — Gotcha 15/17). Replace local `./images/<hash>` with the
+  **original source URL** (from `import-work/metadata.json`) or, for a
+  locally-authored brand asset (logo, seal), commit it to the code bus and
+  reference its absolute `https://main--{repo}--{owner}.aem.live/<path>` URL — never
+  a bare `/img/...`. The `build-da.mjs` guardrail hard-fails on any non-`http`
+  `<img src>`. Pre-upload only for URL stability (logo → `/media/…` on
+  `content.da.live`). **DA caps SVG uploads at 40KB** — rasterize any oversized
+  source SVG (QR codes, illustrations) to PNG and pre-upload it before referencing.
 - **Strip the local-preview `nav`/`footer` override rows** from the page metadata (deploy nav to
   global `/nav`, footer to `/footer`).
 - Upload: `PUT admin.da.live/source/{org}/{repo}/<path>.html` multipart field **`data`**, blob `text/html`, using the page's `targetPath` from `migration/site-map.json` verbatim — never a shortened or flattened path.
@@ -395,6 +443,17 @@ node typography-diff.mjs  "<source-url>" "$BUILD" --width 2560
 node block-diff.mjs       "<source-url>" "$BUILD" --width 1920
 node block-diff.mjs       "<source-url>" "$BUILD" --width 2560
 ```
+- **Per-block design re-audit (deployed).** Re-run `page-fidelity-pass` with
+  BUILD = the deployed preview URL (`$BUILD` above) — the DA pipeline reshapes
+  content/images between draft and deploy, so the per-block/chrome audit must be
+  repeated against the deployed page, not just the local draft. Clear its
+  blocker/major tasks before earning `preview-ready`.
+- **Broken-image gate (mandatory, deployed page).** Also run the decode check —
+  `visual-diff.mjs` `failedToLoad` flags, or `node scripts/image-audit.mjs "$BUILD"`
+  standalone — which asserts every `<img>` has `naturalWidth > 0` IN-BROWSER. A
+  `curl`/HTTP-status check and the local drafts server both MISS `about:error`
+  images (Gotcha 15); this gate is the only thing that catches a DA image that
+  didn't sideload (Gotcha 17). Zero decode failures required to earn `preview-ready`.
 - A defect that shows up here but NOT in Phase 5's local check means the delivery
   pipeline reshaped the content in transport (a block's flattened-shape fallback,
   a metadata-driven nav/footer swap, real webfont loading vs local fallback) — fix
@@ -544,12 +603,38 @@ Phase 7. This phase is the whole-batch wrap-up:
     BEFORE the sync step (upload/preview/publish) — an expired token then blocks
     only the final sync, never the substantive work. Never let a subagent guess
     at re-auth.
+15. **Broken images fail SILENTLY past HTTP/curl checks — detect by decode, not status.**
+    A DA round-trip can rewrite an unreachable `<img src>` to `about:error`
+    (`ERR_UNKNOWN_URL_SCHEME`), which produces **no HTTP response** — so a
+    "response.status >= 400" broken-resource check and a `curl` of the asset
+    (which may 200 from the code bus) BOTH pass while the image is blank on the
+    page. The only reliable signal is `img.naturalWidth === 0` evaluated
+    IN-BROWSER on the **deployed** page (`visual-diff.mjs` already flags this as
+    `failedToLoad`; `scripts/image-audit.mjs` runs it standalone). Run it as a
+    hard gate in Phase 6.5.
+16. **`content-diff` scopes to `<main>`; classic-AEM sources have none.** If the
+    source page has no `<main>` (e.g. it renders into `.page-content-container`),
+    the source side inventories the WHOLE document (nav, footer, cookie banner)
+    while the EDS build side inventories `<main>` only — an asymmetry that floods
+    the report with false 🔴 "MISSING" chrome and buries any real miss, and means
+    nav/footer are never actually compared. Detect the source root
+    (`document.querySelector('main') ? 'main' : '.page-content-container'` or the
+    site's equivalent) and pass it as `--main` so both sides are scoped
+    symmetrically. Never dismiss a red set wholesale — fix the scope first.
+17. **DA only sideloads ABSOLUTE image URLs.** A root-relative `<img src="/img/x.png">`
+    — even when that file is committed to the code bus and 200s on `curl` — cannot
+    be sideloaded by DA and ends up broken (Gotcha 15) on the content-bus page.
+    Reference every content image by an absolute `http(s)` URL: the original
+    source URL (DA sideloads it) or the page's own `https://main--{repo}--{owner}.aem.live/...`
+    asset URL. `build-da.mjs` fails the guardrail on any non-`http` `<img src>`.
 
 ## Success criteria
 
-- Page renders at `/drafts/<page>` with 0 console errors / 0 broken images, `npm run lint` clean.
-- Cropped per-section compare against `import-work/screenshot.png` matches (esp. heading slots), at both 1080p and 2K.
-- Diff gate: visual none/justified, content-diff 0 real 🔴, typography-diff 0 unreviewed DIFF rows (type/weight/line-height/line-space/line-weight), block-diff 0 unreviewed DIFF rows (width/text-overlay position/link-button UX/icons) — all **block by block**, at both widths (1920px, 2560px), against BOTH the local draft AND the deployed feature-preview URL.
+- Page renders at `/drafts/<page>` AND at the deployed `aem.page` preview with **0 console errors and 0 decode-failed images** (`img.naturalWidth === 0` checked IN-BROWSER on the deployed page — not curl, not HTTP status, not the local drafts server; see Gotcha 15), `npm run lint` clean.
+- **Nav + footer visual gate passed** (Phase 2): cropped header AND footer screenshots compared against the same crops of the source, at both widths — colours, logos, columns, and layout match. Global chrome is NOT covered by the page diff probes (build side scopes to `<main>`), so this is its own explicit gate.
+- Cropped per-section compare against a **full-page** source capture (`import-work/source-full.png`, whole page incl. footer — not a top-only shot) matches (esp. heading slots), at both 1080p and 2K.
+- Diff gate: **all four probes run** (visual + content + typography + block) — visual none/justified (incl. `failedToLoad`), content-diff 0 real 🔴, typography-diff 0 unreviewed DIFF rows (type/weight/line-height/line-space/line-weight), block-diff 0 unreviewed DIFF rows (width/text-overlay position/link-button UX/icons) — all **block by block**, at both widths (1920px, 2560px), against BOTH the local draft AND the deployed feature-preview URL. When the source has no `<main>`, content-diff is run with `--main <source-content-root>` so scoping is symmetric (see Gotcha 16).
+- Every `<img src>` in DA source docs is an **absolute `http(s)` URL** (DA cannot sideload root-relative paths — Gotcha 17); `build-da.mjs` guardrail reports no ROOT-RELATIVE IMG.
 - Deployed: code on `main`, content previewed + published; `https://main--{repo}--{owner}.aem.live/<path>` renders fully.
 - **Multi-page additionally:** scope was confirmed with the user and recorded in
   `migration/scope.json`; every page in `migration/site-map.json` reached
